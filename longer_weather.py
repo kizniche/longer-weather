@@ -22,7 +22,7 @@
 #  Contact at kylegabriel.com
 #
 #
-#  Prerequisites: pillow tesseract imagehash imageio
+#  Prerequisites: pillow tesseract imagehash imageio moviepy
 #  8 new frames are generated roughly every 2 hours 15 minutes
 #
 import argparse
@@ -38,10 +38,15 @@ import urllib
 from PIL import Image
 from datetime import datetime
 from datetime import timedelta
+from moviepy.editor import *
 from shutil import copyfile
 from threading import Thread
 
-REF_PERIOD_MIN = 16
+# How often to download each GIF and look for new frames
+REFRESH_PERIOD_MIN = 30
+# How many frames does each GIF have
+NUMBER_FRAMES = 9
+# List of GIFs. Number of frames per GIF must be <= NUMBER_FRAMES
 GIF_HTTP_FILES = [
     'http://images.intellicast.com/WxImages/RadarLoop/usa_None_anim.gif',
     'http://images.intellicast.com/WxImages/RadarLoop/csg_None_anim.gif'
@@ -81,30 +86,32 @@ class LongerWeather(Thread):
         self.running = True
 
     def run(self):
-        logger.info("[Daemon] Daemon Started")
+        logger.info('[Daemon] Daemon Started')
 
         while self.running:
             present = datetime.now()
             if present > self.timer:
-                self.timer = self.timer + timedelta(minutes=REF_PERIOD_MIN)
+                self.timer = self.timer + timedelta(minutes=REFRESH_PERIOD_MIN)
                 for each_gif in GIF_HTTP_FILES:
                     gif_name = each_gif.split('/')[-1][:-4]
-                    logger.info("[Daemon] Saving GIF from intellicast.net")
+                    logger.info('[Daemon] Saving {f}'.format(
+                        f=each_gif))
                     gif_image_file = self.get_gif(each_gif)
-                    logger.info("[Daemon] GIF acquired, extracting frames")
+                    logger.info('[Daemon] Extracting frames from {f}'.format(
+                        f=each_gif.split('/')[-1]))
                     self.process_image(gif_image_file, gif_name)
-                    logger.info("[Daemon] Deleting GIF")
+                    logger.debug('[Daemon] Deleting {f}'.format(
+                        f=gif_image_file.split('/')[-1]))
                     os.remove(gif_image_file)
-                    logger.info("[Daemon] Creating combined GIF")
                     self.combine_gif(gif_name)
-                logger.info("[Daemon] Next Grab: {next:.2f} minutes".format(
+                logger.info('[Daemon] Next Grab: {next:.2f} minutes'.format(
                     next=(self.timer - present).total_seconds() / 60))
             time.sleep(1)
 
     @staticmethod
     def get_gif(gif_address):
-        date_now = datetime.now().strftime("%Y_%m_%d_%H-%M-%S")
-        gif_image_file = "{path}/frames/{date}-{name}.gif".format(
+        date_now = datetime.now().strftime('%Y_%m_%d_%H-%M-%S')
+        gif_image_file = '{path}/frames/{date}-{name}.gif'.format(
             path=INSTALL_DIRECTORY, date=date_now, name=gif_address.split('/')[-1][:-4])
         urllib.urlretrieve(gif_address, gif_image_file)
         return gif_image_file
@@ -112,14 +119,22 @@ class LongerWeather(Thread):
     def combine_gif(self, gif_name):
         save_path = '{path}/combined/{date}-{name}.gif'.format(
             path=INSTALL_DIRECTORY,
-            date=self.start_time.strftime("%Y_%m_%d_%H-%M-%S"),
+            date=self.start_time.strftime('%Y_%m_%d_%H-%M-%S'),
             name=gif_name)
         images = []
         for dir_name, _, file_names in os.walk(FRAME_PATH):
             for each_name in sorted(file_names):
                 if gif_name in each_name:
-                    images.append(imageio.imread(os.path.join(dir_name, each_name)))
+                    images.append(
+                        imageio.imread(os.path.join(dir_name, each_name)))
         imageio.mimsave(save_path, images)
+        logger.info('[Daemon] Creating GIF at combined/{path}'.format(
+            path=save_path.split('/')[-1]))
+
+        clip = ImageSequenceClip(images, fps=10)
+        clip.write_videofile('{name}.webm'.format(name=save_path),
+                             preset='superslow',
+                             ffmpeg_params=["-b:v", "2M"])
 
     def terminate(self):
         self.running = False
@@ -159,7 +174,7 @@ class LongerWeather(Thread):
 
         try:
             while True:
-                logger.debug('saving {path} ({mode}) frame {frame}, {size} {title}'.format(
+                logger.debug('Saving {path} ({mode}) frame {frame}, {size} {title}'.format(
                     path=img_path, mode=mode, frame=i, size=im.size, title=im.tile))
 
                 # If the GIF uses local colour tables, each frame will have its own palette
@@ -176,23 +191,25 @@ class LongerWeather(Thread):
 
                 # hash frame image and compare hash to last hashed frames.
                 # If hash is unique, it's a new frame. Save it as a new file.
-                img_hash = imagehash.dhash(Image.open(check_frame_path), hash_size=12)
-                if str(img_hash) not in self.last_img_sizes[gif_name]:
-                    self.last_img_sizes[gif_name].append(str(img_hash))
-                    logger.info("Hashes: {}".format(self.last_img_sizes))
+                img_hash = imagehash.dhash(Image.open(check_frame_path), hash_size=14)
+                if img_hash not in self.last_img_sizes[gif_name]:
+                    self.last_img_sizes[gif_name].append(img_hash)
                     frame_name = '{name}-{frame:0>5}.png'.format(
                         name=gif_name, frame=self.frame_number[gif_name])
                     new_file = os.path.join(FRAME_PATH, frame_name)
                     copyfile(check_frame_path, new_file)
                     self.frame_number[gif_name] += 1
+                    logger.info('[Daemon] New frame detected. Appending hash '
+                                '{hash} to list.'.format(hash=img_hash))
+                    logger.debug('Hashes: {}'.format(self.last_img_sizes[gif_name]))
+
+                    # Ensure the list stays relatively small
+                    if len(self.last_img_sizes[gif_name]) > NUMBER_FRAMES + 2:
+                        self.last_img_sizes[gif_name].pop(0)
 
                 os.remove(check_frame_path)
                 i += 1
                 im.seek(im.tell() + 1)
-
-                # Ensure the list stays relatively small
-                if len(self.last_img_sizes[gif_name]) > 16:
-                    self.last_img_sizes[gif_name].pop(0)
         except EOFError:
             pass
 
@@ -214,7 +231,7 @@ def set_user_grp(file_path, user, group):
 
 
 def delete_all_gifs(dir_path):
-    file_list = [f for f in os.listdir(dir_path) if f.endswith(".gif") or f.endswith(".png")]
+    file_list = [f for f in os.listdir(dir_path) if f.endswith('.gif') or f.endswith('.png')]
     for f in file_list:
         file_del = os.path.join(dir_path, f)
         os.remove(file_del)
@@ -222,12 +239,12 @@ def delete_all_gifs(dir_path):
 
 def parseargs(parse):
     parse.add_argument('-d', '--dontdelete', action='store_true',
-                       help="Don't delete the images already in sync/")
+                       help='Don\'t delete the images already in sync/')
     return parse.parse_args()
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Longer Weather")
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Longer Weather')
     args = parseargs(parser)
     assure_path_exists(COMB_PATH)
     assure_path_exists(FRAME_PATH)
@@ -241,6 +258,6 @@ if __name__ == "__main__":
         while longer_weather.is_alive():
             time.sleep(1)
     except KeyboardInterrupt:
-        logger.error("Keyboard exit")
+        logger.error('Keyboard exit')
         longer_weather.terminate()
         sys.exit(1)
