@@ -6,8 +6,8 @@ import os
 from flask import Flask
 from flask import send_file
 
-INSTALL_DIRECTORY = os.path.dirname(os.path.realpath(__file__))
-COMB_PATH = os.path.join(INSTALL_DIRECTORY, 'combined')
+from config import COMB_PATH
+from config import GIF_HTTP_FILES
 
 logger = logging.basicConfig()
 
@@ -17,12 +17,17 @@ app = Flask(__name__, template_folder=tmpl_dir)
 
 @app.route('/', methods=('GET', 'POST'))
 def default_page():
-    list_files = []
-    for dir_name, _, file_names in os.walk(COMB_PATH):
-        for each_name in sorted(file_names):
-            if each_name.endswith('.gif'):
-                list_files.append(os.path.join(dir_name, each_name))
-    return send_file(list_files[-1], mimetype='image/gif')
+    list_files = {}
+    for each_gif in GIF_HTTP_FILES:
+        list_files[each_gif] = []
+        for dir_name, _, file_names in os.walk(COMB_PATH):
+            for each_name in sorted(file_names):
+                if each_name.endswith('.gif'):
+                    list_files[each_gif].append(os.path.join(dir_name, each_name))
+
+    file_name = list_files[GIF_HTTP_FILES[0]][-1]
+
+    return send_file(file_name, mimetype='image/gif')
 
 
 @app.route('/<period>', methods=('GET', 'POST'))

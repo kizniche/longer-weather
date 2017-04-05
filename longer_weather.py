@@ -21,9 +21,19 @@
 #
 #  Contact at kylegabriel.com
 #
+#  Prerequisites:
+#  Python: pillow imagehash imageio moviepy
+#  Linux: ffmpeg scipy (python-scipy)
 #
-#  Prerequisites: pillow tesseract imagehash imageio moviepy
-#  8 new frames are generated roughly every 2 hours 15 minutes
+#  Raspberry Pi:
+#  ffmpeg on Raspberry Pi: https://github.com/ccrisan/motioneye/wiki/Install-On-Raspbian
+#  Try First:
+#     sudo apt-get install libopenblas-dev gfortran
+#     sudo apt-get install python-scipy
+#  If that fails, try:
+#     sudo pip install numpy
+#     sudo apt-get install libopenblas-dev (required to compile scipy)
+#     compile/install scipy
 #
 import argparse
 import logging
@@ -41,21 +51,13 @@ from datetime import timedelta
 from moviepy.editor import *
 from shutil import copyfile
 from threading import Thread
-
-# How often to download each GIF and look for new frames
-REFRESH_PERIOD_MIN = 30
-# How many frames does each GIF have
-NUMBER_FRAMES = 9
-# List of GIFs. Number of frames per GIF must be <= NUMBER_FRAMES
-GIF_HTTP_FILES = [
-    'http://images.intellicast.com/WxImages/RadarLoop/usa_None_anim.gif',
-    'http://images.intellicast.com/WxImages/RadarLoop/csg_None_anim.gif'
-]
-
-INSTALL_DIRECTORY = os.path.dirname(os.path.realpath(__file__))
-LOG_PATH = os.path.join(INSTALL_DIRECTORY, 'status.log')
-COMB_PATH = os.path.join(INSTALL_DIRECTORY, 'combined')
-FRAME_PATH = os.path.join(INSTALL_DIRECTORY, 'frames')
+from config import REFRESH_PERIOD_MIN
+from config import NUMBER_FRAMES
+from config import GIF_HTTP_FILES
+from config import INSTALL_DIRECTORY
+from config import LOG_PATH
+from config import COMB_PATH
+from config import FRAME_PATH
 
 logFormatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger()
@@ -204,8 +206,8 @@ class LongerWeather(Thread):
                     logger.debug('Hashes: {}'.format(self.last_img_sizes[gif_name]))
 
                     # Ensure the list stays relatively small
-                    if len(self.last_img_sizes[gif_name]) > NUMBER_FRAMES + 2:
-                        self.last_img_sizes[gif_name].pop(0)
+                    # if len(self.last_img_sizes[gif_name]) > NUMBER_FRAMES + 2:
+                    #     self.last_img_sizes[gif_name].pop(0)
 
                 os.remove(check_frame_path)
                 i += 1
