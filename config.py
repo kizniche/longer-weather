@@ -2,15 +2,25 @@
 import os
 
 # How often to download each GIF and look for new frames
-REFRESH_PERIOD_MIN = 30
+PERIOD_MIN = 14
 
 # How many frames does each GIF have
 NUMBER_FRAMES = 9
 
 # List of GIFs. Number of frames per GIF must be <= NUMBER_FRAMES
 GIF_HTTP_FILES = [
-    'http://images.intellicast.com/WxImages/RadarLoop/usa_None_anim.gif',
-    'http://images.intellicast.com/WxImages/RadarLoop/csg_None_anim.gif'
+    {
+        'address': 'http://images.intellicast.com/WxImages/RadarLoop/usa_None_anim.gif',
+        'frames_gif': 9,
+        'frames_max': 96,
+        'hash_size': 13
+    },
+    {
+        'address': 'http://images.intellicast.com/WxImages/RadarLoop/csg_None_anim.gif',
+        'frames_gif': 9,
+        'frames_max': 96,
+        'hash_size': 13
+    }
 ]
 
 INSTALL_DIRECTORY = os.path.dirname(os.path.realpath(__file__))

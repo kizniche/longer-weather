@@ -21,42 +21,30 @@
 #
 #  Contact at kylegabriel.com
 #
-#  Prerequisites:
-#  Python: pillow imagehash imageio moviepy
-#  Linux: ffmpeg scipy (python-scipy)
-#
 #  Raspberry Pi:
-#  ffmpeg on Raspberry Pi: https://github.com/ccrisan/motioneye/wiki/Install-On-Raspbian
-#  Try First:
-#     sudo apt-get install libopenblas-dev gfortran
-#     sudo apt-get install python-scipy
-#  If that fails, try:
-#     sudo pip install numpy
-#     sudo apt-get install libopenblas-dev (required to compile scipy)
-#     compile/install scipy
+#    sudo apt-get install python-numpy imagemagick
+#    sudo pip install pillow imagehash
 #
 import argparse
-import logging
+import filecmp
 import grp
 import imagehash
-import imageio
+import logging
 import os
 import pwd
+import subprocess
 import sys
 import time
 import urllib
 from PIL import Image
 from datetime import datetime
 from datetime import timedelta
-from moviepy.editor import *
+from random import randint
 from shutil import copyfile
 from threading import Thread
-from config import REFRESH_PERIOD_MIN
-from config import NUMBER_FRAMES
+from config import PERIOD_MIN
 from config import GIF_HTTP_FILES
-from config import INSTALL_DIRECTORY
 from config import LOG_PATH
-from config import COMB_PATH
 from config import FRAME_PATH
 
 logFormatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
@@ -74,113 +62,141 @@ logger.setLevel(logging.INFO)
 
 
 class LongerWeather(Thread):
-    """Longer Weather Class"""
+    """Longer Weather"""
     def __init__(self):
         Thread.__init__(self)
-        self.frame_number = {}
-        self.last_img_sizes = {}
-        for each_gif in GIF_HTTP_FILES:
-            file_name = each_gif.split('/')[-1][:-4]
-            self.frame_number[file_name] = 1
-            self.last_img_sizes[file_name] = []
+        logger.info('Daemon Started')
         self.start_time = datetime.now()
+        self.frame_number = {}
+        self.frame_hashes = {}
+        self.startup = {}
+        for gif_address in GIF_HTTP_FILES:
+            gif = self.return_paths(gif_address['address'])
+            self.frame_number[gif['name_root']] = 1
+            self.frame_hashes[gif['name_root']] = []
+            self.startup[gif['name_root']] = True
         self.timer = datetime.now()
+        self.hash_table_populate()  # Populate hash table if frames exist
         self.running = True
 
     def run(self):
-        logger.info('[Daemon] Daemon Started')
-
         while self.running:
             present = datetime.now()
             if present > self.timer:
-                self.timer = self.timer + timedelta(minutes=REFRESH_PERIOD_MIN)
-                for each_gif in GIF_HTTP_FILES:
-                    gif_name = each_gif.split('/')[-1][:-4]
-                    logger.info('[Daemon] Saving {f}'.format(
-                        f=each_gif))
-                    gif_image_file = self.get_gif(each_gif)
-                    logger.info('[Daemon] Extracting frames from {f}'.format(
-                        f=each_gif.split('/')[-1]))
-                    self.process_image(gif_image_file, gif_name)
-                    logger.debug('[Daemon] Deleting {f}'.format(
-                        f=gif_image_file.split('/')[-1]))
-                    os.remove(gif_image_file)
-                    self.combine_gif(gif_name)
-                logger.info('[Daemon] Next Grab: {next:.2f} minutes'.format(
+                
+                self.timer = self.timer + timedelta(minutes=PERIOD_MIN)
+
+                # Download and save the original GIFs
+                for gif_address in GIF_HTTP_FILES:
+                    gif = self.return_paths(gif_address['address'])
+                    if self.get_gif(gif_address['address'], gif['gif_saved']):
+                        gif = self.return_paths(gif_address['address'])
+                        # Separate and save unique frames from the GIF
+                        self.gif_to_frames(gif, gif_address)
+
+                        # Delete the original GIF
+                        logger.info('Deleting {f}'.format(f=gif['gif_saved']))
+                        os.remove(gif['gif_saved'])
+
+                        # Create new GIF from unique frames
+                        self.create_gif(gif, gif_address['frames_max'])
+                
+                logger.info('Next Grab: {next:.2f} minutes'.format(
                     next=(self.timer - present).total_seconds() / 60))
+
             time.sleep(1)
 
     @staticmethod
-    def get_gif(gif_address):
-        date_now = datetime.now().strftime('%Y_%m_%d_%H-%M-%S')
-        gif_image_file = '{path}/frames/{date}-{name}.gif'.format(
-            path=INSTALL_DIRECTORY, date=date_now, name=gif_address.split('/')[-1][:-4])
-        urllib.urlretrieve(gif_address, gif_image_file)
-        return gif_image_file
+    def create_gif(gif, frames_max):
+        """ Use images in each frames subdirectory to create a GIF """
+        # Delete any frames greater than the max limit
+        files_all = sorted(next(os.walk(gif['path_frames']))[2])
+        while len(files_all) > frames_max:
+            os.remove(files_all[0])
+            files_all = sorted(next(os.walk(gif['path_frames']))[2])
 
-    def combine_gif(self, gif_name):
-        save_path = '{path}/combined/{date}-{name}.gif'.format(
-            path=INSTALL_DIRECTORY,
-            date=self.start_time.strftime('%Y_%m_%d_%H-%M-%S'),
-            name=gif_name)
-        images = []
-        for dir_name, _, file_names in os.walk(FRAME_PATH):
-            for each_name in sorted(file_names):
-                if gif_name in each_name:
-                    images.append(
-                        imageio.imread(os.path.join(dir_name, each_name)))
-        imageio.mimsave(save_path, images)
-        logger.info('[Daemon] Creating GIF at combined/{path}'.format(
-            path=save_path.split('/')[-1]))
-
-        clip = ImageSequenceClip(images, fps=10)
-        clip.write_videofile('{name}.webm'.format(name=save_path),
-                             preset='superslow',
-                             ffmpeg_params=["-b:v", "2M"])
-
-    def terminate(self):
-        self.running = False
+        # Get last file to pause GIF
+        last_file = os.path.join(
+            gif['path_frames'],
+            sorted(next(os.walk(gif['path_frames']))[2])[-1])
+        logger.info('Generating {f}'.format(f=gif['new_gif']))
+        logger.info('from {f}/*.png'.format(f=gif['path_frames']))
+        cmd = 'convert -delay 10 {path}/*.png -delay 200 {last} -loop 0 {spath}'.format(
+            path=gif['path_frames'],
+            last=last_file,
+            spath=gif['new_gif'])
+        logger.info('CMD: {f}'.format(f=cmd))
+        subprocess.call(cmd, shell=True)
 
     @staticmethod
-    def analyze_image(path):
-        """
-        Pre-process pass over the image to determine the mode (full or additive).
-        Necessary as assessing single frames isn't reliable. Need to know the mode 
-        before processing all frames.
-        """
-        im = Image.open(path)
-        results = {
-            'size': im.size,
-            'mode': 'full',
-        }
-        try:
-            while True:
-                if im.tile:
-                    tile = im.tile[0]
-                    update_region = tile[1]
-                    update_region_dimensions = update_region[2:]
-                    if update_region_dimensions != im.size:
-                        results['mode'] = 'partial'
-                        break
-                im.seek(im.tell() + 1)
-        except EOFError:
-            pass
-        return results
+    def get_gif(gif_address, gif_saved):
+        """ Download a GIF """
+        file_first = None
+        file_second = None
+        file_third = None
+        success = False
+        max_tries = 3
+        tries = 0
+        logger.info('Get {f}'.format(f=gif_address))
 
-    def process_image(self, img_path, gif_name):
+        # Occasionally the GIF server will render a GIF of an incorrect time
+        # period or sequence. Therefore, we download it a few times and
+        # compare them.
+        while tries < max_tries:
+            file_first = '{}-first.gif'.format(gif_saved)
+            logger.info('Download {f}'.format(f=file_first.split('/')[-1]))
+            urllib.urlretrieve(gif_address, file_first)
+            time.sleep(randint(2, 10))
+            file_second = '{}-second.gif'.format(gif_saved)
+            logger.info('Download {f}'.format(f=file_second.split('/')[-1]))
+            urllib.urlretrieve(gif_address, file_second)
+            time.sleep(randint(2, 10))
+            file_third = '{}-third.gif'.format(gif_saved)
+            logger.info('Download {f}'.format(f=file_third.split('/')[-1]))
+            urllib.urlretrieve(gif_address, file_third)
+            if (filecmp.cmp(file_first, file_second) and
+                    filecmp.cmp(file_second, file_third)):
+                copyfile(file_first, gif_saved)
+                logger.info('Downloaded GIFs are the same')
+                success = True
+                tries = 4
+            else:
+                logger.error('Downloaded GIFs are not the same! Wait 20 sec.')
+                time.sleep(20)
+            tries += 1
+
+        if not success:
+            return False
+
+        os.remove(file_first)
+        os.remove(file_second)
+        os.remove(file_third)
+        logger.info('Saved {f}'.format(f=gif_saved))
+        return True
+
+    def gif_to_frames(self, gif, gif_config):
         """ Iterate the GIF, extracting each frame """
-        mode = self.analyze_image(img_path)['mode']
-        im = Image.open(img_path)
+        if not os.path.isfile(gif['gif_saved']):
+            logger.error('No File {f}'.format(f=gif['gif_saved']))
+            return
+
+        im = Image.open(gif['gif_saved'])
         i = 0
         p = im.getpalette()
+        gif_check = False
+        max_tries = 3
+        tries = 0
+        logger.info('Extracting frames from {f}'.format(
+            f=gif['gif_saved'].split('/')[-1]))
 
         try:
             while True:
-                logger.debug('Saving {path} ({mode}) frame {frame}, {size} {title}'.format(
-                    path=img_path, mode=mode, frame=i, size=im.size, title=im.tile))
+                logger.debug('Frame {i}: {path}, {size}, {title}'.format(
+                    i=i, path=gif['gif_saved'], size=im.size, title=im.tile))
 
-                # If the GIF uses local colour tables, each frame will have its own palette
-                # If not, we need to apply the global palette to the new frame
+                # If the GIF uses local colour tables, each frame will have
+                # its own palette. If not, we need to apply the global palette
+                # to the new frame.
                 if not im.getpalette():
                     im.putpalette(p)
 
@@ -188,32 +204,114 @@ class LongerWeather(Thread):
                 new_frame.paste(im, (0, 0), im.convert('RGBA'))
 
                 # Save frame to file
-                check_frame_path = '{path}/check_frame.png'.format(path=FRAME_PATH)
-                new_frame.save(check_frame_path, 'PNG')
+                path_frame_tmp = os.path.join(gif['path_frames'], 'frame.png')
+                new_frame.save(path_frame_tmp, 'PNG')
 
                 # hash frame image and compare hash to last hashed frames.
                 # If hash is unique, it's a new frame. Save it as a new file.
-                img_hash = imagehash.dhash(Image.open(check_frame_path), hash_size=14)
-                if img_hash not in self.last_img_sizes[gif_name]:
-                    self.last_img_sizes[gif_name].append(img_hash)
+                img_hash = self.hash_generate(
+                    path_frame_tmp, gif_config['hash_size'])
+
+                # Check if the first frame is in the hash list (it should)
+                # If it isn't, the GIF may be of an erroneous time period
+                # (sporadically happens with this server)
+                if not self.startup[gif['name_root']]:
+                    while not gif_check and tries < max_tries:
+                        if img_hash not in self.frame_hashes[gif['name_root']]:
+                            logger.error('First frame of new GIF not '
+                                         'found in the previous GIF!')
+                            logger.error('Redownloading GIF.')
+                            self.get_gif(
+                                gif_config['address'], gif['gif_saved'])
+                            tries += 1
+                        else:
+                            logger.info('First frame of GIF found in hash '
+                                        'list (Good)')
+                            gif_check = True
+
+                permit_hash_check = ((gif_check or tries > max_tries) or
+                                     self.startup[gif['name_root']])
+
+                if (permit_hash_check and
+                        img_hash not in self.frame_hashes[gif['name_root']]):
                     frame_name = '{name}-{frame:0>5}.png'.format(
-                        name=gif_name, frame=self.frame_number[gif_name])
-                    new_file = os.path.join(FRAME_PATH, frame_name)
-                    copyfile(check_frame_path, new_file)
-                    self.frame_number[gif_name] += 1
-                    logger.info('[Daemon] New frame detected. Appending hash '
-                                '{hash} to list.'.format(hash=img_hash))
-                    logger.debug('Hashes: {}'.format(self.last_img_sizes[gif_name]))
+                        name=gif['name'],
+                        frame=self.frame_number[gif['name_root']])
+                    path_frame_copy = os.path.join(
+                        gif['path_frames'], frame_name)
+                    copyfile(path_frame_tmp, path_frame_copy)
 
-                    # Ensure the list stays relatively small
-                    # if len(self.last_img_sizes[gif_name]) > NUMBER_FRAMES + 2:
-                    #     self.last_img_sizes[gif_name].pop(0)
+                    logger.info('New {file} hash {hash}'.format(
+                        file=frame_name, hash=img_hash))
+                    logger.debug('Hashes: {}'.format(
+                        self.frame_hashes[gif['name_root']]))
 
-                os.remove(check_frame_path)
+                    self.frame_hashes[gif['name_root']].append(img_hash)
+                    self.frame_number[gif['name_root']] += 1
+
+                self.hash_table_trim(
+                    gif['name_root'], gif_config['frames_gif'])
+
+                os.remove(path_frame_tmp)
                 i += 1
                 im.seek(im.tell() + 1)
         except EOFError:
             pass
+
+        self.startup[gif['name_root']] = False
+
+    @staticmethod
+    def hash_generate(frame, size):
+        return str(imagehash.dhash(Image.open(frame),hash_size=size))
+
+    def hash_table_populate(self):
+        """ If frames exist, populate the hash table with their hashes """
+        for gif_address in GIF_HTTP_FILES:
+            gif = self.return_paths(gif_address['address'])
+            all_files = sorted(next(os.walk(gif['path_frames']))[2])
+            for each_file in all_files:
+                name_test = '{name}-'.format(name=gif['name'])
+                if name_test in each_file.split('/')[-1]:
+                    file_path = os.path.join(gif['path_frames'], each_file)
+                    file_hash = self.hash_generate(
+                        file_path, gif_address['hash_size'])
+                    logger.info('Found {file}, {hash}'.format(
+                        file=each_file,
+                        hash=file_hash
+                    ))
+                    self.frame_hashes[gif['name_root']].append(file_hash)
+                    self.frame_number[gif['name_root']] += 1
+
+            self.hash_table_trim(gif['name_root'], gif_address['frames_gif'])
+
+    def hash_table_trim(self, name_root, frames_gif):
+        """ Trim hash table to certain length """
+        # Ensure the list stays close but not smaller than the number of
+        # frames in the original GIF.
+        while len(self.frame_hashes[name_root]) > frames_gif + 1:
+            self.frame_hashes[name_root].pop(0)
+
+    def return_paths(self, http_address):
+        """ Return path and filename strings as options for each GIF """
+        name = http_address.split('/')[-1]
+        name_root = name[:-4]
+        path_frames = os.path.join(FRAME_PATH, name_root)
+        gif_saved = '{path}/{name}_original.gif'.format(
+            path=path_frames,
+            date=self.start_time.strftime('%Y_%m_%d_%H-%M-%S'),
+            name=name)
+        new_gif = os.path.join(path_frames, name)
+        assure_path_exists(path_frames)
+        return dict(
+            name=name,
+            name_root=name_root,
+            path_frames=path_frames,
+            gif_saved=gif_saved,
+            new_gif=new_gif
+        )
+
+    def terminate(self):
+        self.running = False
 
 
 def assure_path_exists(dir_path):
@@ -232,7 +330,8 @@ def set_user_grp(file_path, user, group):
     os.chown(file_path, uid, gid)
 
 
-def delete_all_gifs(dir_path):
+def delete_images(dir_path):
+    """ Delete all GIFs and PNGs in """
     file_list = [f for f in os.listdir(dir_path) if f.endswith('.gif') or f.endswith('.png')]
     for f in file_list:
         file_del = os.path.join(dir_path, f)
@@ -240,19 +339,21 @@ def delete_all_gifs(dir_path):
 
 
 def parseargs(parse):
-    parse.add_argument('-d', '--dontdelete', action='store_true',
-                       help='Don\'t delete the images already in sync/')
+    parse.add_argument('-d', '--delete', action='store_true',
+                       help='Delete all current images')
     return parse.parse_args()
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Longer Weather')
     args = parseargs(parser)
-    assure_path_exists(COMB_PATH)
-    assure_path_exists(FRAME_PATH)
 
-    logger.debug('Deleting gifs')
-    delete_all_gifs(FRAME_PATH)
+    if args.delete:
+        for dir_name, dir_names, file_names in os.walk(FRAME_PATH):
+            for each_directory in dir_names:
+                path = os.path.join(dir_name, each_directory)
+                logger.info('Deleting {f}'.format(f=path))
+                delete_images(path)
 
     longer_weather = LongerWeather()
     longer_weather.start()
