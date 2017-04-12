@@ -16,24 +16,35 @@ app = Flask(__name__, template_folder=tmpl_dir)
 
 @app.route('/')
 def default_page():
-    for http_address in GIF_HTTP_FILES:
-        name = http_address['address'].split('/')[-1]
-        name_root = name[:-4]
-        path_frames = os.path.join(FRAME_PATH, name_root)
-        new_gif = os.path.join(path_frames, name)
-        return send_file(new_gif, mimetype='image/gif')
+    try:
+        for http_address in GIF_HTTP_FILES:
+            unique_name = '{base}_{prefix}'.format(
+                base=http_address['base_address'].split('/')[-1],
+                prefix=http_address['file_prefix'])
+            # webm = os.path.join(
+            #     FRAME_PATH, '{file}.webm'.format(file=unique_name))
+            # return send_file(webm, mimetype='video/webm')
+            gif = os.path.join(
+                FRAME_PATH, '{file}.gif'.format(file=unique_name))
+            return send_file(gif, mimetype='image/gif')
+    except Exception:
+        return '', 204
 
 
 @app.route('/<int:gif>')
 def gif_page(gif):
-    if int(gif) >= len(GIF_HTTP_FILES) or int(gif) < 0:
-        return ('', 204)
+    try:
+        if int(gif) >= len(GIF_HTTP_FILES) or int(gif) < 0:
+            return '', 204
 
-    name = GIF_HTTP_FILES[int(gif)]['address'].split('/')[-1]
-    name_root = name[:-4]
-    path_frames = os.path.join(FRAME_PATH, name_root)
-    new_gif = os.path.join(path_frames, name)
-    return send_file(new_gif, mimetype='image/gif')
+        unique_name = '{base}_{prefix}'.format(
+            base=GIF_HTTP_FILES[int(gif)]['base_address'].split('/')[-1],
+            prefix=GIF_HTTP_FILES[int(gif)]['file_prefix'])
+        gif = os.path.join(
+            FRAME_PATH, '{file}.gif'.format(file=unique_name))
+        return send_file(gif, mimetype='image/gif')
+    except Exception:
+        return '', 204
 
 
 if __name__ == '__main__':

@@ -1,26 +1,28 @@
 # -*- coding: utf-8 -*-
 import os
 
-# How often to download each GIF and look for new frames
-PERIOD_MIN = 14
-
-# How many frames does each GIF have
-NUMBER_FRAMES = 9
-
-# List of GIFs. Number of frames per GIF must be <= NUMBER_FRAMES
 GIF_HTTP_FILES = [
     {
-        'address': 'http://images.intellicast.com/WxImages/RadarLoop/usa_None_anim.gif',
-        'frames_gif': 9,
-        'frames_max': 96,
-        'hash_size': 13
+        'base_address': 'https://radar.weather.gov/ridge/Conus/RadarImg',
+        'file_prefix': 'NAT',
+        'frames_max': 144,
+        'animation_speed': 10,
+        'update_min': 15
     },
     {
-        'address': 'http://images.intellicast.com/WxImages/RadarLoop/csg_None_anim.gif',
-        'frames_gif': 9,
-        'frames_max': 96,
-        'hash_size': 13
-    }
+        'base_address': 'https://radar.weather.gov/ridge/Conus/RadarImg',
+        'file_prefix': 'southeast',
+        'frames_max': 144,
+        'animation_speed': 10,
+        'update_min': 15
+    },
+    {
+        'base_address': 'https://radar.weather.gov/ridge/Conus/RadarImg',
+        'file_prefix': 'southmissvly',
+        'frames_max': 144,
+        'animation_speed': 10,
+        'update_min': 15
+    },
 ]
 
 INSTALL_DIRECTORY = os.path.dirname(os.path.realpath(__file__))
